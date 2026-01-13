@@ -1,0 +1,14 @@
+# Streamlit app
+streamlit>=1.28.0
+
+# Video processing
+ffmpeg-python>=0.2.0
+opencv-python>=4.8.0
+
+# AI APIs
+anthropic>=0.40.0
+openai>=1.0.0
+
+# Utilities
+python-dotenv>=1.0.0
+Pillow>=10.0.0
