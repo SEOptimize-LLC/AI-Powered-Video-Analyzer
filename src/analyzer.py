@@ -1,35 +1,48 @@
 """
 Analysis Engine Module
-Generates executive summaries and actionable insights from video content.
+Generates executive summaries and actionable insights using OpenRouter API.
 """
 
 import os
 from typing import List, Optional
 
-from anthropic import Anthropic
+from openai import OpenAI
 
 
-def get_anthropic_client(api_key: str = None) -> Anthropic:
+# Available models on OpenRouter for analysis
+ANALYSIS_MODELS = {
+    "claude-sonnet": "anthropic/claude-sonnet-4.5",
+    "gpt-5-mini": "openai/gpt-5-mini",
+    "gemini-flash": "google/gemini-3-flash-preview",
+}
+
+DEFAULT_ANALYSIS_MODEL = "anthropic/claude-sonnet-4.5"
+
+
+def get_openrouter_client(api_key: str = None) -> OpenAI:
     """
-    Get Anthropic client.
+    Get OpenRouter client (OpenAI-compatible).
 
     Args:
-        api_key: Anthropic API key (if None, will try st.secrets or env var)
+        api_key: OpenRouter API key (if None, will try st.secrets or env var)
 
     Returns:
-        Anthropic client instance
+        OpenAI client configured for OpenRouter
     """
     if api_key is None:
         try:
             import streamlit as st
-            api_key = st.secrets.get("ANTHROPIC_API_KEY")
+            api_key = st.secrets.get("OPENROUTER_API_KEY")
         except Exception:
-            api_key = os.environ.get("ANTHROPIC_API_KEY")
+            api_key = os.environ.get("OPENROUTER_API_KEY")
 
     if not api_key:
-        raise ValueError("Anthropic API key not found. Set it in Streamlit secrets or ANTHROPIC_API_KEY env var.")
+        raise ValueError("OpenRouter API key not found. Set it in Streamlit secrets or OPENROUTER_API_KEY env var.")
 
-    return Anthropic(api_key=api_key)
+    return OpenAI(
+        base_url="https://openrouter.ai/api/v1",
+        api_key=api_key,
+    )
 
 
 def generate_analysis(
@@ -37,7 +50,8 @@ def generate_analysis(
     visual_summary: Optional[str] = None,
     video_duration: Optional[str] = None,
     custom_instructions: Optional[str] = None,
-    api_key: str = None
+    api_key: str = None,
+    model: str = None
 ) -> dict:
     """
     Generate comprehensive video analysis including executive summary and actionable insights.
@@ -47,12 +61,14 @@ def generate_analysis(
         visual_summary: Optional summary of visual content
         video_duration: Optional formatted duration string
         custom_instructions: Optional additional instructions for analysis
-        api_key: Anthropic API key
+        api_key: OpenRouter API key
+        model: Model to use for analysis
 
     Returns:
         Dictionary containing all analysis components
     """
-    client = get_anthropic_client(api_key)
+    client = get_openrouter_client(api_key)
+    model = model or DEFAULT_ANALYSIS_MODEL
 
     # Build context
     context_parts = []
@@ -107,11 +123,14 @@ Suggest related topics, concepts, or resources the viewer might want to explore 
 ## Content Overview
 A brief structural overview of how the video is organized (e.g., "Introduction (0-5 min), Main Concepts (5-30 min), Case Studies (30-45 min), Conclusion (45-60 min)")"""
 
-    response = client.messages.create(
-        model="claude-sonnet-4-20250514",
+    response = client.chat.completions.create(
+        model=model,
         max_tokens=4000,
-        system=system_prompt,
         messages=[
+            {
+                "role": "system",
+                "content": system_prompt,
+            },
             {
                 "role": "user",
                 "content": user_prompt,
@@ -119,7 +138,7 @@ A brief structural overview of how the video is organized (e.g., "Introduction (
         ],
     )
 
-    analysis_text = response.content[0].text
+    analysis_text = response.choices[0].message.content
 
     # Parse the analysis into sections
     sections = parse_analysis_sections(analysis_text)
@@ -127,7 +146,7 @@ A brief structural overview of how the video is organized (e.g., "Introduction (
     return {
         "full_analysis": analysis_text,
         "sections": sections,
-        "model": "claude-sonnet-4-20250514",
+        "model": model,
         "transcript_length": len(transcript),
     }
 
@@ -165,18 +184,24 @@ def parse_analysis_sections(analysis_text: str) -> dict:
     return sections
 
 
-def generate_quick_summary(transcript: str, api_key: str = None) -> str:
+def generate_quick_summary(
+    transcript: str,
+    api_key: str = None,
+    model: str = None
+) -> str:
     """
     Generate a quick one-paragraph summary of the video.
 
     Args:
         transcript: Full transcript of the video
-        api_key: Anthropic API key
+        api_key: OpenRouter API key
+        model: Model to use
 
     Returns:
         One-paragraph summary string
     """
-    client = get_anthropic_client(api_key)
+    client = get_openrouter_client(api_key)
+    model = model or DEFAULT_ANALYSIS_MODEL
 
     # For very long transcripts, use a sample
     if len(transcript) > 50000:
@@ -190,8 +215,8 @@ def generate_quick_summary(transcript: str, api_key: str = None) -> str:
     else:
         transcript_sample = transcript
 
-    response = client.messages.create(
-        model="claude-sonnet-4-20250514",
+    response = client.chat.completions.create(
+        model=model,
         max_tokens=500,
         messages=[
             {
@@ -204,28 +229,35 @@ TRANSCRIPT:
         ],
     )
 
-    return response.content[0].text
+    return response.choices[0].message.content
 
 
-def generate_topic_tags(transcript: str, api_key: str = None, max_tags: int = 10) -> List[str]:
+def generate_topic_tags(
+    transcript: str,
+    api_key: str = None,
+    model: str = None,
+    max_tags: int = 10
+) -> List[str]:
     """
     Generate topic tags for the video content.
 
     Args:
         transcript: Full transcript of the video
-        api_key: Anthropic API key
+        api_key: OpenRouter API key
+        model: Model to use
         max_tags: Maximum number of tags to generate
 
     Returns:
         List of topic tags
     """
-    client = get_anthropic_client(api_key)
+    client = get_openrouter_client(api_key)
+    model = model or DEFAULT_ANALYSIS_MODEL
 
     # Use a sample for long transcripts
     sample = transcript[:20000] if len(transcript) > 20000 else transcript
 
-    response = client.messages.create(
-        model="claude-sonnet-4-20250514",
+    response = client.chat.completions.create(
+        model=model,
         max_tokens=200,
         messages=[
             {
@@ -240,7 +272,7 @@ TRANSCRIPT:
 
     tags = [
         tag.strip().strip("-•*")
-        for tag in response.content[0].text.strip().split("\n")
+        for tag in response.choices[0].message.content.strip().split("\n")
         if tag.strip()
     ]
 

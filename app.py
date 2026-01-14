@@ -1,6 +1,7 @@
 """
 AI-Powered Video Analyzer
 A Streamlit app that analyzes videos and generates executive summaries with actionable insights.
+Uses OpenRouter API for LLM access and OpenAI Whisper for transcription.
 """
 
 import os
@@ -11,9 +12,16 @@ import streamlit as st
 
 from src.video_processor import process_video, format_duration
 from src.transcription import transcribe_audio, format_transcript_with_timestamps
-from src.visual_analyzer import analyze_frames, summarize_visual_content
-from src.analyzer import generate_analysis, generate_topic_tags
+from src.visual_analyzer import analyze_frames, summarize_visual_content, VISION_MODELS
+from src.analyzer import generate_analysis, generate_topic_tags, ANALYSIS_MODELS
 
+
+# Available models
+MODELS = {
+    "Claude Sonnet 4.5": "anthropic/claude-sonnet-4.5",
+    "GPT-5 Mini": "openai/gpt-5-mini",
+    "Gemini 3 Flash": "google/gemini-3-flash-preview",
+}
 
 # Page configuration
 st.set_page_config(
@@ -67,10 +75,10 @@ def check_api_keys() -> tuple[bool, list]:
     missing = []
 
     if not st.secrets.get("OPENAI_API_KEY"):
-        missing.append("OPENAI_API_KEY")
+        missing.append("OPENAI_API_KEY (for Whisper transcription)")
 
-    if not st.secrets.get("ANTHROPIC_API_KEY"):
-        missing.append("ANTHROPIC_API_KEY")
+    if not st.secrets.get("OPENROUTER_API_KEY"):
+        missing.append("OPENROUTER_API_KEY (for AI analysis)")
 
     return len(missing) == 0, missing
 
@@ -87,18 +95,42 @@ def main():
     keys_ok, missing_keys = check_api_keys()
 
     if not keys_ok:
-        st.error(f"Missing API keys: {', '.join(missing_keys)}")
+        st.error(f"Missing API keys:")
+        for key in missing_keys:
+            st.markdown(f"- {key}")
         st.info("Please add your API keys in Streamlit's Secrets management (Settings > Secrets)")
         st.code("""
 # Add these to your Streamlit secrets:
-OPENAI_API_KEY = "sk-..."
-ANTHROPIC_API_KEY = "sk-ant-..."
+OPENAI_API_KEY = "sk-..."           # For Whisper transcription
+OPENROUTER_API_KEY = "sk-or-..."    # For AI analysis (OpenRouter)
         """)
         return
 
     # Sidebar configuration
     with st.sidebar:
         st.header("Settings")
+
+        st.subheader("AI Models")
+
+        analysis_model_name = st.selectbox(
+            "Analysis Model",
+            options=list(MODELS.keys()),
+            index=0,
+            help="Model used for generating summaries and insights"
+        )
+        analysis_model = MODELS[analysis_model_name]
+
+        vision_model_name = st.selectbox(
+            "Vision Model",
+            options=list(MODELS.keys()),
+            index=2,  # Default to Gemini Flash for vision (faster/cheaper)
+            help="Model used for analyzing video frames"
+        )
+        vision_model = MODELS[vision_model_name]
+
+        st.divider()
+
+        st.subheader("Visual Analysis")
 
         analyze_visuals = st.checkbox(
             "Analyze visual content",
@@ -128,10 +160,18 @@ ANTHROPIC_API_KEY = "sk-ant-..."
         st.markdown("### Estimated Costs")
         st.markdown("""
         - **Whisper API**: ~$0.006/min
-        - **Claude Analysis**: ~$0.10-0.30
-        - **Visual Analysis**: ~$0.05-0.15
+        - **OpenRouter**: Varies by model
 
-        **~$0.50-0.80 per hour of video**
+        **~$0.50-1.00 per hour of video**
+        """)
+
+        st.divider()
+
+        st.markdown("### Models via OpenRouter")
+        st.markdown("""
+        - Claude Sonnet 4.5
+        - GPT-5 Mini
+        - Gemini 3 Flash
         """)
 
     # File upload
@@ -187,7 +227,7 @@ ANTHROPIC_API_KEY = "sk-ant-..."
                 # Step 3: Analyze visual content (optional)
                 visual_summary = None
                 if analyze_visuals and video_data["frames"]:
-                    status_text.text("Step 3/4: Analyzing visual content...")
+                    status_text.text(f"Step 3/4: Analyzing visual content with {vision_model_name}...")
 
                     def update_frame_progress(current, total):
                         progress = 40 + int((current / total) * 20)
@@ -195,29 +235,34 @@ ANTHROPIC_API_KEY = "sk-ant-..."
 
                     frame_analyses = analyze_frames(
                         video_data["frames"],
+                        model=vision_model,
                         progress_callback=update_frame_progress
                     )
 
-                    visual_summary = summarize_visual_content(frame_analyses)
+                    visual_summary = summarize_visual_content(
+                        frame_analyses,
+                        model=vision_model
+                    )
                     st.success(f"Analyzed {len(frame_analyses)} key frames")
                 else:
                     progress_bar.progress(60)
 
                 # Step 4: Generate comprehensive analysis
-                status_text.text("Step 4/4: Generating analysis with AI...")
+                status_text.text(f"Step 4/4: Generating analysis with {analysis_model_name}...")
                 progress_bar.progress(70)
 
                 analysis = generate_analysis(
                     transcript=transcript,
                     visual_summary=visual_summary,
                     video_duration=video_data["duration_formatted"],
-                    custom_instructions=custom_instructions if custom_instructions else None
+                    custom_instructions=custom_instructions if custom_instructions else None,
+                    model=analysis_model
                 )
 
                 progress_bar.progress(90)
 
                 # Generate topic tags
-                tags = generate_topic_tags(transcript)
+                tags = generate_topic_tags(transcript, model=analysis_model)
 
                 progress_bar.progress(100)
                 status_text.text("Analysis complete!")
@@ -325,6 +370,8 @@ ANTHROPIC_API_KEY = "sk-ant-..."
 **Video:** {uploaded_file.name}
 **Duration:** {video_data['duration_formatted']}
 **Topics:** {', '.join(tags)}
+**Analysis Model:** {analysis_model_name}
+**Vision Model:** {vision_model_name}
 
 ---
 
@@ -371,11 +418,11 @@ ANTHROPIC_API_KEY = "sk-ant-..."
 
         with col2:
             st.markdown("**2. Transcribe**")
-            st.markdown("Audio is transcribed via Whisper API")
+            st.markdown("Audio transcribed via Whisper API")
 
         with col3:
             st.markdown("**3. Analyze**")
-            st.markdown("Claude analyzes content & visuals")
+            st.markdown("AI analyzes content & visuals via OpenRouter")
 
         with col4:
             st.markdown("**4. Results**")

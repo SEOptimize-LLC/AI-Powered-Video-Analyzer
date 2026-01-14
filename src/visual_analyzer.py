@@ -1,36 +1,49 @@
 """
 Visual Analyzer Module
-Analyzes video frames using Claude Vision API.
+Analyzes video frames using OpenRouter API with vision-capable models.
 """
 
 import base64
 import os
 from typing import List, Tuple
 
-from anthropic import Anthropic
+from openai import OpenAI
 
 
-def get_anthropic_client(api_key: str = None) -> Anthropic:
+# Available vision-capable models on OpenRouter
+VISION_MODELS = {
+    "gemini-flash": "google/gemini-3-flash-preview",
+    "claude-sonnet": "anthropic/claude-sonnet-4.5",
+    "gpt-5-mini": "openai/gpt-5-mini",
+}
+
+DEFAULT_VISION_MODEL = "google/gemini-3-flash-preview"
+
+
+def get_openrouter_client(api_key: str = None) -> OpenAI:
     """
-    Get Anthropic client.
+    Get OpenRouter client (OpenAI-compatible).
 
     Args:
-        api_key: Anthropic API key (if None, will try st.secrets or env var)
+        api_key: OpenRouter API key (if None, will try st.secrets or env var)
 
     Returns:
-        Anthropic client instance
+        OpenAI client configured for OpenRouter
     """
     if api_key is None:
         try:
             import streamlit as st
-            api_key = st.secrets.get("ANTHROPIC_API_KEY")
+            api_key = st.secrets.get("OPENROUTER_API_KEY")
         except Exception:
-            api_key = os.environ.get("ANTHROPIC_API_KEY")
+            api_key = os.environ.get("OPENROUTER_API_KEY")
 
     if not api_key:
-        raise ValueError("Anthropic API key not found. Set it in Streamlit secrets or ANTHROPIC_API_KEY env var.")
+        raise ValueError("OpenRouter API key not found. Set it in Streamlit secrets or OPENROUTER_API_KEY env var.")
 
-    return Anthropic(api_key=api_key)
+    return OpenAI(
+        base_url="https://openrouter.ai/api/v1",
+        api_key=api_key,
+    )
 
 
 def encode_image_to_base64(image_path: str) -> str:
@@ -56,6 +69,7 @@ def analyze_single_frame(
     image_path: str,
     timestamp: float,
     api_key: str = None,
+    model: str = None,
     context: str = None
 ) -> dict:
     """
@@ -64,13 +78,15 @@ def analyze_single_frame(
     Args:
         image_path: Path to the frame image
         timestamp: Timestamp in seconds where frame was captured
-        api_key: Anthropic API key
+        api_key: OpenRouter API key
+        model: Model to use (defaults to Gemini Flash)
         context: Optional context about the video
 
     Returns:
         Dictionary with frame analysis
     """
-    client = get_anthropic_client(api_key)
+    client = get_openrouter_client(api_key)
+    model = model or DEFAULT_VISION_MODEL
 
     image_data = encode_image_to_base64(image_path)
     media_type = get_image_media_type(image_path)
@@ -91,19 +107,17 @@ Keep your analysis concise but informative (2-4 sentences)."""
     if context:
         prompt = f"Context: {context}\n\n{prompt}"
 
-    response = client.messages.create(
-        model="claude-sonnet-4-20250514",
+    response = client.chat.completions.create(
+        model=model,
         max_tokens=500,
         messages=[
             {
                 "role": "user",
                 "content": [
                     {
-                        "type": "image",
-                        "source": {
-                            "type": "base64",
-                            "media_type": media_type,
-                            "data": image_data,
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:{media_type};base64,{image_data}",
                         },
                     },
                     {
@@ -119,13 +133,15 @@ Keep your analysis concise but informative (2-4 sentences)."""
         "timestamp": timestamp,
         "timestamp_formatted": timestamp_str,
         "image_path": image_path,
-        "analysis": response.content[0].text,
+        "analysis": response.choices[0].message.content,
+        "model": model,
     }
 
 
 def analyze_frames(
     frames: List[Tuple[str, float]],
     api_key: str = None,
+    model: str = None,
     context: str = None,
     progress_callback=None
 ) -> List[dict]:
@@ -134,7 +150,8 @@ def analyze_frames(
 
     Args:
         frames: List of (image_path, timestamp) tuples
-        api_key: Anthropic API key
+        api_key: OpenRouter API key
+        model: Model to use for analysis
         context: Optional context about the video
         progress_callback: Optional callback function(current, total) for progress
 
@@ -151,6 +168,7 @@ def analyze_frames(
             image_path,
             timestamp,
             api_key=api_key,
+            model=model,
             context=context
         )
         results.append(analysis)
@@ -158,19 +176,27 @@ def analyze_frames(
     return results
 
 
-def summarize_visual_content(frame_analyses: List[dict], api_key: str = None) -> str:
+def summarize_visual_content(
+    frame_analyses: List[dict],
+    api_key: str = None,
+    model: str = None
+) -> str:
     """
     Create a summary of all visual content from frame analyses.
 
     Args:
         frame_analyses: List of frame analysis dictionaries
-        api_key: Anthropic API key
+        api_key: OpenRouter API key
+        model: Model to use for summarization
 
     Returns:
         Summary string of visual content
     """
     if not frame_analyses:
         return "No visual content analyzed."
+
+    client = get_openrouter_client(api_key)
+    model = model or DEFAULT_VISION_MODEL
 
     # Compile all frame analyses
     content_parts = []
@@ -181,10 +207,8 @@ def summarize_visual_content(frame_analyses: List[dict], api_key: str = None) ->
 
     visual_content = "\n\n".join(content_parts)
 
-    client = get_anthropic_client(api_key)
-
-    response = client.messages.create(
-        model="claude-sonnet-4-20250514",
+    response = client.chat.completions.create(
+        model=model,
         max_tokens=1000,
         messages=[
             {
@@ -201,4 +225,4 @@ Summarize in 2-3 paragraphs:
         ],
     )
 
-    return response.content[0].text
+    return response.choices[0].message.content
