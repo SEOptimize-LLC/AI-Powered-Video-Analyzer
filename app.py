@@ -545,7 +545,11 @@ OPENROUTER_API_KEY = "sk-or-..."    # For AI analysis (OpenRouter)
         )
 
         if video_url:
-            if st.button("Download & Analyze Video", type="primary", use_container_width=True):
+            # Check for unsupported platforms
+            if "mega.nz" in video_url or "mega.co.nz" in video_url:
+                st.error("MEGA links are not supported (requires JavaScript-based download).")
+                st.info("Please download the video from MEGA first, then upload the file directly.")
+            elif st.button("Download & Analyze Video", type="primary", use_container_width=True):
                 temp_dir = tempfile.mkdtemp(prefix="video_analyzer_")
                 try:
                     download_status = st.empty()
@@ -555,7 +559,7 @@ OPENROUTER_API_KEY = "sk-or-..."    # For AI analysis (OpenRouter)
 
                     def update_download_progress(downloaded, total):
                         if total > 0:
-                            pct = int((downloaded / total) * 100)
+                            pct = min(100, int((downloaded / total) * 100))  # Clamp to 100
                             download_progress.progress(pct)
                             download_status.text(f"Downloading: {downloaded // (1024*1024)} MB / {total // (1024*1024)} MB")
 
