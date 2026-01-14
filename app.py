@@ -601,13 +601,15 @@ OPENROUTER_API_KEY = "sk-or-..."    # For AI analysis (OpenRouter)
         st.markdown("""
         **Supported URL sources:**
         - Direct video URLs (.mp4, .mov, etc.)
-        - Google Drive (share link)
-        - Dropbox (share link)
+        - Dropbox (share link) - **Recommended for large files**
+        - Google Drive (share link) - *May not work for files >100MB*
         """)
+
+        st.warning("**For large files (>100MB):** Google Drive often blocks automated downloads. Use Dropbox or upload directly instead.")
 
         video_url = st.text_input(
             "Enter video URL",
-            placeholder="https://drive.google.com/file/d/... or direct video URL"
+            placeholder="https://www.dropbox.com/... or direct video URL"
         )
 
         if video_url:
@@ -615,61 +617,68 @@ OPENROUTER_API_KEY = "sk-or-..."    # For AI analysis (OpenRouter)
             if "mega.nz" in video_url or "mega.co.nz" in video_url:
                 st.error("MEGA links are not supported (requires JavaScript-based download).")
                 st.info("Please download the video from MEGA first, then upload the file directly.")
-            elif st.button("Download & Analyze Video", type="primary", use_container_width=True):
-                temp_dir = tempfile.mkdtemp(prefix="video_analyzer_")
-                try:
-                    download_status = st.empty()
-                    download_progress = st.progress(0)
+            else:
+                # Show warning for Google Drive
+                if "drive.google.com" in video_url:
+                    st.warning("Google Drive may block large file downloads. If this fails, please use Dropbox or upload the file directly.")
 
-                    download_status.text("Downloading video...")
+                button_label = "Try Download & Analyze" if "drive.google.com" in video_url else "Download & Analyze Video"
 
-                    def update_download_progress(downloaded, total):
-                        if total > 0:
-                            pct = min(100, int((downloaded / total) * 100))  # Clamp to 100
-                            download_progress.progress(pct)
-                            download_status.text(f"Downloading: {downloaded // (1024*1024)} MB / {total // (1024*1024)} MB")
+                if st.button(button_label, type="primary", use_container_width=True):
+                    temp_dir = tempfile.mkdtemp(prefix="video_analyzer_")
+                    try:
+                        download_status = st.empty()
+                        download_progress = st.progress(0)
 
-                    video_path = download_video_from_url(
-                        video_url,
-                        temp_dir,
-                        progress_callback=update_download_progress
-                    )
+                        download_status.text("Downloading video...")
 
-                    video_name = os.path.basename(video_path)
-                    file_size_mb = os.path.getsize(video_path) / (1024 * 1024)
+                        def update_download_progress(downloaded, total):
+                            if total > 0:
+                                pct = min(100, int((downloaded / total) * 100))  # Clamp to 100
+                                download_progress.progress(pct)
+                                download_status.text(f"Downloading: {downloaded // (1024*1024)} MB / {total // (1024*1024)} MB")
 
-                    download_status.empty()
-                    download_progress.empty()
-                    st.success(f"Downloaded: **{video_name}** ({file_size_mb:.1f} MB)")
+                        video_path = download_video_from_url(
+                            video_url,
+                            temp_dir,
+                            progress_callback=update_download_progress
+                        )
 
-                    results = run_analysis(
-                        video_path=video_path,
-                        video_name=video_name,
-                        temp_dir=temp_dir,
-                        analyze_visuals=analyze_visuals,
-                        num_frames=num_frames,
-                        vision_model=vision_model,
-                        vision_model_name=vision_model_name,
-                        analysis_model=analysis_model,
-                        analysis_model_name=analysis_model_name,
-                        custom_instructions=custom_instructions
-                    )
+                        video_name = os.path.basename(video_path)
+                        file_size_mb = os.path.getsize(video_path) / (1024 * 1024)
 
-                    # Store results in session state
-                    st.session_state.analysis_results = results
+                        download_status.empty()
+                        download_progress.empty()
+                        st.success(f"Downloaded: **{video_name}** ({file_size_mb:.1f} MB)")
 
-                    # Rerun to display results properly
-                    st.rerun()
+                        results = run_analysis(
+                            video_path=video_path,
+                            video_name=video_name,
+                            temp_dir=temp_dir,
+                            analyze_visuals=analyze_visuals,
+                            num_frames=num_frames,
+                            vision_model=vision_model,
+                            vision_model_name=vision_model_name,
+                            analysis_model=analysis_model,
+                            analysis_model_name=analysis_model_name,
+                            custom_instructions=custom_instructions
+                        )
 
-                except requests.exceptions.RequestException as e:
-                    st.error(f"Failed to download video: {str(e)}")
-                    st.info("Make sure the URL is publicly accessible or a valid sharing link.")
-                except Exception as e:
-                    st.error(f"An error occurred: {str(e)}")
-                    st.exception(e)
-                finally:
-                    if temp_dir and os.path.exists(temp_dir):
-                        shutil.rmtree(temp_dir)
+                        # Store results in session state
+                        st.session_state.analysis_results = results
+
+                        # Rerun to display results properly
+                        st.rerun()
+
+                    except requests.exceptions.RequestException as e:
+                        st.error(f"Failed to download video: {str(e)}")
+                        st.info("Make sure the URL is publicly accessible or a valid sharing link.")
+                    except Exception as e:
+                        st.error(f"An error occurred: {str(e)}")
+                        st.exception(e)
+                    finally:
+                        if temp_dir and os.path.exists(temp_dir):
+                            shutil.rmtree(temp_dir)
 
     # Show placeholder when no input
     if st.session_state.analysis_results is None:
