@@ -22,6 +22,24 @@ def get_video_duration(video_path: str) -> float:
         video_path
     ]
     result = subprocess.run(cmd, capture_output=True, text=True)
+
+    if result.returncode != 0 or not result.stdout.strip():
+        # Check if file exists and has content
+        if not os.path.exists(video_path):
+            raise ValueError(f"Video file not found: {video_path}")
+
+        file_size = os.path.getsize(video_path)
+        if file_size < 1000:
+            raise ValueError(f"Downloaded file is too small ({file_size} bytes). The download may have failed or returned an error page instead of the video.")
+
+        # Try to read first few bytes to check if it's HTML (error page)
+        with open(video_path, 'rb') as f:
+            header = f.read(100).lower()
+            if b'<!doctype' in header or b'<html' in header:
+                raise ValueError("Downloaded file is an HTML page, not a video. This usually happens with Google Drive large files that require confirmation. Please try a direct download link or upload the file directly.")
+
+        raise ValueError(f"Could not determine video duration. ffprobe error: {result.stderr}")
+
     return float(result.stdout.strip())
 
 
