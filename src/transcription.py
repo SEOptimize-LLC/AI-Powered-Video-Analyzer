@@ -80,12 +80,12 @@ def transcribe_audio(
     }
 
     # Include segments if available (for verbose_json)
-    if hasattr(response, "segments"):
+    if hasattr(response, "segments") and response.segments:
         result["segments"] = [
             {
-                "start": seg.get("start", seg.start) if hasattr(seg, "start") else seg["start"],
-                "end": seg.get("end", seg.end) if hasattr(seg, "end") else seg["end"],
-                "text": seg.get("text", seg.text) if hasattr(seg, "text") else seg["text"],
+                "start": seg.start if hasattr(seg, "start") else seg["start"],
+                "end": seg.end if hasattr(seg, "end") else seg["end"],
+                "text": seg.text if hasattr(seg, "text") else seg["text"],
             }
             for seg in response.segments
         ]
@@ -170,12 +170,15 @@ def transcribe_large_audio(
             all_text.append(response.text)
 
             # Adjust segment timestamps
-            if hasattr(response, "segments"):
+            if hasattr(response, "segments") and response.segments:
                 for seg in response.segments:
+                    seg_start = seg.start if hasattr(seg, "start") else seg["start"]
+                    seg_end = seg.end if hasattr(seg, "end") else seg["end"]
+                    seg_text = seg.text if hasattr(seg, "text") else seg["text"]
                     adjusted_seg = {
-                        "start": seg["start"] + start_time,
-                        "end": seg["end"] + start_time,
-                        "text": seg["text"],
+                        "start": seg_start + start_time,
+                        "end": seg_end + start_time,
+                        "text": seg_text,
                     }
                     all_segments.append(adjusted_seg)
 
