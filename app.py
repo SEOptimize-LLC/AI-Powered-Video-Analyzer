@@ -34,6 +34,10 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+# Initialize session state for storing results
+if "analysis_results" not in st.session_state:
+    st.session_state.analysis_results = None
+
 # Custom CSS
 st.markdown("""
 <style>
@@ -88,7 +92,6 @@ def check_api_keys() -> tuple[bool, list]:
 
 def convert_google_drive_url(url: str) -> str:
     """Convert Google Drive sharing URL to direct download URL."""
-    # Match Google Drive file ID from various URL formats
     patterns = [
         r'drive\.google\.com/file/d/([a-zA-Z0-9_-]+)',
         r'drive\.google\.com/open\?id=([a-zA-Z0-9_-]+)',
@@ -107,7 +110,6 @@ def convert_google_drive_url(url: str) -> str:
 def convert_dropbox_url(url: str) -> str:
     """Convert Dropbox sharing URL to direct download URL."""
     if "dropbox.com" in url:
-        # Replace dl=0 with dl=1 for direct download
         url = re.sub(r'dl=0', 'dl=1', url)
         if 'dl=1' not in url:
             url = url + ('&' if '?' in url else '?') + 'dl=1'
@@ -115,41 +117,27 @@ def convert_dropbox_url(url: str) -> str:
 
 
 def download_video_from_url(url: str, output_dir: str, progress_callback=None) -> str:
-    """
-    Download video from URL to local file.
-
-    Supports:
-    - Direct video URLs
-    - Google Drive links
-    - Dropbox links
-    """
-    # Convert sharing URLs to direct download URLs
+    """Download video from URL to local file."""
     if "drive.google.com" in url:
         url = convert_google_drive_url(url)
     elif "dropbox.com" in url:
         url = convert_dropbox_url(url)
 
-    # Try to get filename from URL or headers
     filename = "video.mp4"
-
-    # Start download with streaming
     response = requests.get(url, stream=True, allow_redirects=True)
     response.raise_for_status()
 
-    # Try to get filename from content-disposition header
     content_disp = response.headers.get('content-disposition', '')
     if 'filename=' in content_disp:
         match = re.search(r'filename="?([^";\n]+)"?', content_disp)
         if match:
             filename = match.group(1)
 
-    # Get total size if available
     total_size = int(response.headers.get('content-length', 0))
-
     output_path = os.path.join(output_dir, filename)
 
     downloaded = 0
-    chunk_size = 8192 * 1024  # 8MB chunks
+    chunk_size = 8192 * 1024
 
     with open(output_path, 'wb') as f:
         for chunk in response.iter_content(chunk_size=chunk_size):
@@ -166,14 +154,13 @@ def run_analysis(video_path: str, video_name: str, temp_dir: str,
                  analyze_visuals: bool, num_frames: int,
                  vision_model: str, vision_model_name: str,
                  analysis_model: str, analysis_model_name: str,
-                 custom_instructions: str):
-    """Run the full analysis pipeline on a video."""
+                 custom_instructions: str) -> dict:
+    """Run the full analysis pipeline on a video. Returns results dict."""
 
-    # Progress tracking
     progress_bar = st.progress(0)
     status_text = st.empty()
 
-    # Step 1: Process video (extract audio and frames)
+    # Step 1: Process video
     status_text.text("Step 1/4: Processing video...")
     progress_bar.progress(10)
 
@@ -238,23 +225,34 @@ def run_analysis(video_path: str, video_name: str, temp_dir: str,
     progress_bar.progress(100)
     status_text.text("Analysis complete!")
 
-    # Display results
-    display_results(
-        analysis=analysis,
-        transcript=transcript,
-        transcript_data=transcript_data,
-        visual_summary=visual_summary,
-        video_data=video_data,
-        video_name=video_name,
-        tags=tags,
-        analysis_model_name=analysis_model_name,
-        vision_model_name=vision_model_name
-    )
+    # Return all results as a dictionary to store in session state
+    return {
+        "analysis": analysis,
+        "transcript": transcript,
+        "transcript_data": transcript_data,
+        "visual_summary": visual_summary,
+        "video_data": {
+            "duration_formatted": video_data["duration_formatted"]
+        },
+        "video_name": video_name,
+        "tags": tags,
+        "analysis_model_name": analysis_model_name,
+        "vision_model_name": vision_model_name
+    }
 
 
-def display_results(analysis, transcript, transcript_data, visual_summary,
-                   video_data, video_name, tags, analysis_model_name, vision_model_name):
-    """Display the analysis results."""
+def display_results(results: dict):
+    """Display the analysis results from session state."""
+
+    analysis = results["analysis"]
+    transcript = results["transcript"]
+    transcript_data = results["transcript_data"]
+    visual_summary = results["visual_summary"]
+    video_data = results["video_data"]
+    video_name = results["video_name"]
+    tags = results["tags"]
+    analysis_model_name = results["analysis_model_name"]
+    vision_model_name = results["vision_model_name"]
 
     st.divider()
 
@@ -312,7 +310,6 @@ def display_results(analysis, transcript, transcript_data, visual_summary,
     with tab4:
         st.markdown("### Full Transcript")
 
-        # Show formatted transcript with timestamps if available
         if "segments" in transcript_data and transcript_data["segments"]:
             formatted = format_transcript_with_timestamps(transcript_data["segments"])
             st.text_area(
@@ -333,27 +330,8 @@ def display_results(analysis, transcript, transcript_data, visual_summary,
     st.divider()
     st.markdown("### Download Results")
 
-    col1, col2, col3 = st.columns(3)
-
-    with col1:
-        st.download_button(
-            "Download Full Analysis",
-            analysis["full_analysis"],
-            file_name=f"{video_name}_analysis.md",
-            mime="text/markdown"
-        )
-
-    with col2:
-        st.download_button(
-            "Download Transcript",
-            transcript,
-            file_name=f"{video_name}_transcript.txt",
-            mime="text/plain"
-        )
-
-    with col3:
-        # Combined report
-        full_report = f"""# Video Analysis Report
+    # Prepare download content
+    full_report = f"""# Video Analysis Report
 
 **Video:** {video_name}
 **Duration:** {video_data['duration_formatted']}
@@ -377,12 +355,41 @@ def display_results(analysis, transcript, transcript_data, visual_summary,
 
 {transcript}
 """
+
+    col1, col2, col3 = st.columns(3)
+
+    with col1:
+        st.download_button(
+            "Download Full Analysis",
+            analysis["full_analysis"],
+            file_name=f"{video_name}_analysis.md",
+            mime="text/markdown",
+            key="download_analysis"
+        )
+
+    with col2:
+        st.download_button(
+            "Download Transcript",
+            transcript,
+            file_name=f"{video_name}_transcript.txt",
+            mime="text/plain",
+            key="download_transcript"
+        )
+
+    with col3:
         st.download_button(
             "Download Complete Report",
             full_report,
             file_name=f"{video_name}_complete_report.md",
-            mime="text/markdown"
+            mime="text/markdown",
+            key="download_complete"
         )
+
+    # Button to clear results and analyze another video
+    st.divider()
+    if st.button("Analyze Another Video", type="secondary"):
+        st.session_state.analysis_results = None
+        st.rerun()
 
 
 def main():
@@ -408,6 +415,12 @@ OPENROUTER_API_KEY = "sk-or-..."    # For AI analysis (OpenRouter)
         """)
         return
 
+    # If we have results in session state, display them
+    if st.session_state.analysis_results is not None:
+        st.success("Analysis complete! Results are shown below.")
+        display_results(st.session_state.analysis_results)
+        return
+
     # Sidebar configuration
     with st.sidebar:
         st.header("Settings")
@@ -425,7 +438,7 @@ OPENROUTER_API_KEY = "sk-or-..."    # For AI analysis (OpenRouter)
         vision_model_name = st.selectbox(
             "Vision Model",
             options=list(MODELS.keys()),
-            index=2,  # Default to Gemini Flash for vision (faster/cheaper)
+            index=2,
             help="Model used for analyzing video frames"
         )
         vision_model = MODELS[vision_model_name]
@@ -474,12 +487,7 @@ OPENROUTER_API_KEY = "sk-or-..."    # For AI analysis (OpenRouter)
         horizontal=True
     )
 
-    video_path = None
-    video_name = None
-    temp_dir = None
-
     if input_method == "Upload file (up to 200MB)":
-        # File upload
         uploaded_file = st.file_uploader(
             "Upload your video file",
             type=["mp4", "mov", "avi", "mkv", "webm"],
@@ -497,7 +505,7 @@ OPENROUTER_API_KEY = "sk-or-..."    # For AI analysis (OpenRouter)
                     with open(video_path, "wb") as f:
                         f.write(uploaded_file.getbuffer())
 
-                    run_analysis(
+                    results = run_analysis(
                         video_path=video_path,
                         video_name=uploaded_file.name,
                         temp_dir=temp_dir,
@@ -509,6 +517,13 @@ OPENROUTER_API_KEY = "sk-or-..."    # For AI analysis (OpenRouter)
                         analysis_model_name=analysis_model_name,
                         custom_instructions=custom_instructions
                     )
+
+                    # Store results in session state
+                    st.session_state.analysis_results = results
+
+                    # Rerun to display results properly
+                    st.rerun()
+
                 except Exception as e:
                     st.error(f"An error occurred: {str(e)}")
                     st.exception(e)
@@ -517,7 +532,6 @@ OPENROUTER_API_KEY = "sk-or-..."    # For AI analysis (OpenRouter)
                         shutil.rmtree(temp_dir)
 
     else:
-        # URL input
         st.markdown("""
         **Supported URL sources:**
         - Direct video URLs (.mp4, .mov, etc.)
@@ -534,7 +548,6 @@ OPENROUTER_API_KEY = "sk-or-..."    # For AI analysis (OpenRouter)
             if st.button("Download & Analyze Video", type="primary", use_container_width=True):
                 temp_dir = tempfile.mkdtemp(prefix="video_analyzer_")
                 try:
-                    # Download progress
                     download_status = st.empty()
                     download_progress = st.progress(0)
 
@@ -559,7 +572,7 @@ OPENROUTER_API_KEY = "sk-or-..."    # For AI analysis (OpenRouter)
                     download_progress.empty()
                     st.success(f"Downloaded: **{video_name}** ({file_size_mb:.1f} MB)")
 
-                    run_analysis(
+                    results = run_analysis(
                         video_path=video_path,
                         video_name=video_name,
                         temp_dir=temp_dir,
@@ -571,6 +584,13 @@ OPENROUTER_API_KEY = "sk-or-..."    # For AI analysis (OpenRouter)
                         analysis_model_name=analysis_model_name,
                         custom_instructions=custom_instructions
                     )
+
+                    # Store results in session state
+                    st.session_state.analysis_results = results
+
+                    # Rerun to display results properly
+                    st.rerun()
+
                 except requests.exceptions.RequestException as e:
                     st.error(f"Failed to download video: {str(e)}")
                     st.info("Make sure the URL is publicly accessible or a valid sharing link.")
@@ -582,7 +602,7 @@ OPENROUTER_API_KEY = "sk-or-..."    # For AI analysis (OpenRouter)
                         shutil.rmtree(temp_dir)
 
     # Show placeholder when no input
-    if input_method == "Upload file (up to 200MB)" and not st.session_state.get('file_uploader'):
+    if st.session_state.analysis_results is None:
         st.markdown("---")
         st.markdown("### How it works")
 
