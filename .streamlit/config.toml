@@ -1,0 +1,5 @@
+[server]
+maxUploadSize = 2000  # 2GB max upload size
+
+[browser]
+gatherUsageStats = false
