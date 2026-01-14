@@ -90,21 +90,80 @@ def check_api_keys() -> tuple[bool, list]:
     return len(missing) == 0, missing
 
 
-def convert_google_drive_url(url: str) -> str:
-    """Convert Google Drive sharing URL to direct download URL."""
+def get_google_drive_file_id(url: str) -> str:
+    """Extract file ID from Google Drive URL."""
     patterns = [
         r'drive\.google\.com/file/d/([a-zA-Z0-9_-]+)',
         r'drive\.google\.com/open\?id=([a-zA-Z0-9_-]+)',
         r'drive\.google\.com/uc\?id=([a-zA-Z0-9_-]+)',
+        r'id=([a-zA-Z0-9_-]+)',
     ]
 
     for pattern in patterns:
         match = re.search(pattern, url)
         if match:
-            file_id = match.group(1)
-            return f"https://drive.google.com/uc?export=download&id={file_id}"
+            return match.group(1)
+    return None
 
-    return url
+
+def download_google_drive_file(file_id: str, output_dir: str, progress_callback=None) -> str:
+    """
+    Download file from Google Drive, handling large file confirmation.
+    """
+    session = requests.Session()
+
+    # First request to get cookies and check for confirmation
+    url = f"https://drive.google.com/uc?export=download&id={file_id}"
+    response = session.get(url, stream=True)
+
+    # Check if we need to confirm (large file warning)
+    confirm_token = None
+
+    # Look for confirm token in cookies
+    for key, value in response.cookies.items():
+        if key.startswith('download_warning'):
+            confirm_token = value
+            break
+
+    # Also check response content for confirm token
+    if not confirm_token:
+        content_start = response.content[:5000].decode('utf-8', errors='ignore')
+        match = re.search(r'confirm=([a-zA-Z0-9_-]+)', content_start)
+        if match:
+            confirm_token = match.group(1)
+
+    # If confirmation needed, make second request with token
+    if confirm_token:
+        url = f"https://drive.google.com/uc?export=download&confirm={confirm_token}&id={file_id}"
+        response = session.get(url, stream=True)
+
+    response.raise_for_status()
+
+    # Get filename
+    filename = "video.mp4"
+    content_disp = response.headers.get('content-disposition', '')
+    if 'filename=' in content_disp:
+        match = re.search(r'filename="?([^";\n]+)"?', content_disp)
+        if match:
+            filename = match.group(1)
+            # Clean up filename
+            filename = filename.strip('"').strip("'")
+
+    total_size = int(response.headers.get('content-length', 0))
+    output_path = os.path.join(output_dir, filename)
+
+    downloaded = 0
+    chunk_size = 8192 * 1024  # 8MB chunks
+
+    with open(output_path, 'wb') as f:
+        for chunk in response.iter_content(chunk_size=chunk_size):
+            if chunk:
+                f.write(chunk)
+                downloaded += len(chunk)
+                if progress_callback and total_size > 0:
+                    progress_callback(downloaded, total_size)
+
+    return output_path
 
 
 def convert_dropbox_url(url: str) -> str:
@@ -118,11 +177,18 @@ def convert_dropbox_url(url: str) -> str:
 
 def download_video_from_url(url: str, output_dir: str, progress_callback=None) -> str:
     """Download video from URL to local file."""
+
+    # Handle Google Drive separately (needs special handling for large files)
     if "drive.google.com" in url:
-        url = convert_google_drive_url(url)
-    elif "dropbox.com" in url:
+        file_id = get_google_drive_file_id(url)
+        if file_id:
+            return download_google_drive_file(file_id, output_dir, progress_callback)
+
+    # Handle Dropbox
+    if "dropbox.com" in url:
         url = convert_dropbox_url(url)
 
+    # Standard download for other URLs
     filename = "video.mp4"
     response = requests.get(url, stream=True, allow_redirects=True)
     response.raise_for_status()
